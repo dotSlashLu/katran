@@ -20,23 +20,24 @@
 #include "pckt_parsing.h"
 #include "handle_icmp.h"
 
-
-__attribute__((__always_inline__))
-static inline __u32 get_packet_hash(struct packet_description *pckt,
-                                    bool hash_16bytes) {
+__attribute__((__always_inline__)) static inline __u32 get_packet_hash(
+    struct packet_description* pckt,
+    bool hash_16bytes) {
   if (hash_16bytes) {
-    return jhash_2words(jhash(pckt->flow.srcv6, 16, INIT_JHASH_SEED_V6),
-                        pckt->flow.ports, INIT_JHASH_SEED);
+    return jhash_2words(
+        jhash(pckt->flow.srcv6, 16, INIT_JHASH_SEED_V6),
+        pckt->flow.ports,
+        INIT_JHASH_SEED);
   } else {
     return jhash_2words(pckt->flow.src, pckt->flow.ports, INIT_JHASH_SEED);
   }
 }
 
-__attribute__((__always_inline__))
-static inline bool is_under_flood(__u64 *cur_time) {
+__attribute__((__always_inline__)) static inline bool is_under_flood(
+    __u64* cur_time) {
   __u32 conn_rate_key = MAX_VIPS + NEW_CONN_RATE_CNTR;
-  struct lb_stats *conn_rate_stats = bpf_map_lookup_elem(
-    &stats, &conn_rate_key);
+  struct lb_stats* conn_rate_stats =
+      bpf_map_lookup_elem(&stats, &conn_rate_key);
   if (!conn_rate_stats) {
     return true;
   }
@@ -59,27 +60,26 @@ static inline bool is_under_flood(__u64 *cur_time) {
   return false;
 }
 
-__attribute__((__always_inline__))
-static inline bool get_packet_dst(struct real_definition **real,
-                                  struct packet_description *pckt,
-                                  struct vip_meta *vip_info,
-                                  bool is_ipv6,
-                                  void *lru_map) {
-
+__attribute__((__always_inline__)) static inline bool get_packet_dst(
+    struct real_definition** real,
+    struct packet_description* pckt,
+    struct vip_meta* vip_info,
+    bool is_ipv6,
+    void* lru_map) {
   // to update lru w/ new connection
   struct real_pos_lru new_dst_lru = {};
   bool under_flood = false;
   bool src_found = false;
-  __u32 *real_pos;
+  __u32* real_pos;
   __u64 cur_time = 0;
   __u32 hash;
   __u32 key;
 
   under_flood = is_under_flood(&cur_time);
 
-  #ifdef LPM_SRC_LOOKUP
+#ifdef LPM_SRC_LOOKUP
   if ((vip_info->flags & F_SRC_ROUTING) && !under_flood) {
-    __u32 *lpm_val;
+    __u32* lpm_val;
     if (is_ipv6) {
       struct v6_lpm_key lpm_key_v6 = {};
       lpm_key_v6.prefixlen = 128;
@@ -96,7 +96,7 @@ static inline bool get_packet_dst(struct real_definition **real,
       key = *lpm_val;
     }
     __u32 stats_key = MAX_VIPS + LPM_SRC_CNTRS;
-    struct lb_stats *data_stats = bpf_map_lookup_elem(&stats, &stats_key);
+    struct lb_stats* data_stats = bpf_map_lookup_elem(&stats, &stats_key);
     if (data_stats) {
       if (src_found) {
         data_stats->v2 += 1;
@@ -105,7 +105,7 @@ static inline bool get_packet_dst(struct real_definition **real,
       }
     }
   }
-  #endif
+#endif
   if (!src_found) {
     bool hash_16bytes = is_ipv6;
 
@@ -120,7 +120,7 @@ static inline bool get_packet_dst(struct real_definition **real,
     key = RING_SIZE * (vip_info->vip_num) + hash;
 
     real_pos = bpf_map_lookup_elem(&ch_rings, &key);
-    if(!real_pos) {
+    if (!real_pos) {
       return false;
     }
     key = *real_pos;
@@ -140,12 +140,11 @@ static inline bool get_packet_dst(struct real_definition **real,
   return true;
 }
 
-__attribute__((__always_inline__))
-static inline void connection_table_lookup(struct real_definition **real,
-                                           struct packet_description *pckt,
-                                           void *lru_map) {
-
-  struct real_pos_lru *dst_lru;
+__attribute__((__always_inline__)) static inline void connection_table_lookup(
+    struct real_definition** real,
+    struct packet_description* pckt,
+    void* lru_map) {
+  struct real_pos_lru* dst_lru;
   __u64 cur_time;
   __u32 key;
   dst_lru = bpf_map_lookup_elem(lru_map, &pckt->flow);
@@ -165,15 +164,19 @@ static inline void connection_table_lookup(struct real_definition **real,
   return;
 }
 
-__attribute__((__always_inline__))
-static inline int process_l3_headers(struct packet_description *pckt,
-                                     __u8 *protocol, __u64 off,
-                                     __u16 *pkt_bytes, void *data,
-                                     void *data_end, bool is_ipv6) {
+__attribute__((__always_inline__)) static inline int process_l3_headers(
+    struct packet_description* pckt,
+    __u8* protocol,
+    __u64 off,
+    __u16* pkt_bytes,
+    void* data,
+    void* data_end,
+    bool is_vlan,
+    bool is_ipv6) {
   __u64 iph_len;
   int action;
-  struct iphdr *iph;
-  struct ipv6hdr *ip6h;
+  struct iphdr* iph;
+  struct ipv6hdr* ip6h;
   if (is_ipv6) {
     ip6h = data + off;
     if (ip6h + 1 > data_end) {
@@ -207,10 +210,12 @@ static inline int process_l3_headers(struct packet_description *pckt,
     if (iph + 1 > data_end) {
       return XDP_DROP;
     }
-    //ihl contains len of ipv4 header in 32bit words
+    // ihl contains len of ipv4 header in 32bit words
     if (iph->ihl != 5) {
       // if len of ipv4 hdr is not equal to 20bytes that means that header
       // contains ip options, and we dont support em
+      char msg[] = "ip with options or not IP pckt\n";
+      bpf_trace_printk(msg, sizeof(msg));
       return XDP_DROP;
     }
     pckt->tos = iph->tos;
@@ -226,6 +231,8 @@ static inline int process_l3_headers(struct packet_description *pckt,
     if (*protocol == IPPROTO_ICMP) {
       action = parse_icmp(data, data_end, off, pckt);
       if (action >= 0) {
+        char msg[] = "processing ICMP\n";
+        bpf_trace_printk(msg, sizeof(msg));
         return action;
       }
     } else {
@@ -233,42 +240,46 @@ static inline int process_l3_headers(struct packet_description *pckt,
       pckt->flow.dst = iph->daddr;
     }
   }
+  char msg[] = "IP header parsed, continue\n";
+  bpf_trace_printk(msg, sizeof(msg));
   return FURTHER_PROCESSING;
 }
 
 #ifdef INLINE_DECAP_GENERIC
-__attribute__((__always_inline__))
-static inline int check_decap_dst(struct packet_description *pckt,
-                                  bool is_ipv6, bool *pass) {
-    struct address dst_addr = {};
-    struct lb_stats *data_stats;
+__attribute__((__always_inline__)) static inline int
+check_decap_dst(struct packet_description* pckt, bool is_ipv6, bool* pass) {
+  struct address dst_addr = {};
+  struct lb_stats* data_stats;
 
-    if (is_ipv6) {
-      memcpy(dst_addr.addrv6, pckt->flow.dstv6, 16);
-    } else {
-      dst_addr.addr = pckt->flow.dst;
-    }
-    __u32 *decap_dst_flags = bpf_map_lookup_elem(&decap_dst, &dst_addr);
+  if (is_ipv6) {
+    memcpy(dst_addr.addrv6, pckt->flow.dstv6, 16);
+  } else {
+    dst_addr.addr = pckt->flow.dst;
+  }
+  __u32* decap_dst_flags = bpf_map_lookup_elem(&decap_dst, &dst_addr);
 
-    if (decap_dst_flags) {
-      *pass = false;
-      __u32 stats_key = MAX_VIPS + REMOTE_ENCAP_CNTRS;
-      data_stats = bpf_map_lookup_elem(&stats, &stats_key);
-      if (!data_stats) {
-        return XDP_DROP;
-      }
-      data_stats->v1 += 1;
+  if (decap_dst_flags) {
+    *pass = false;
+    __u32 stats_key = MAX_VIPS + REMOTE_ENCAP_CNTRS;
+    data_stats = bpf_map_lookup_elem(&stats, &stats_key);
+    if (!data_stats) {
+      return XDP_DROP;
     }
-    return FURTHER_PROCESSING;
+    data_stats->v1 += 1;
+  }
+  return FURTHER_PROCESSING;
 }
 
 #endif // of INLINE_DECAP_GENERIC
 
 #ifdef INLINE_DECAP_IPIP
-__attribute__((__always_inline__))
-static inline int process_encaped_ipip_pckt(void **data, void **data_end,
-                                            struct xdp_md *xdp, bool *is_ipv6,
-                                            __u8 *protocol, bool pass) {
+__attribute__((__always_inline__)) static inline int process_encaped_ipip_pckt(
+    void** data,
+    void** data_end,
+    struct xdp_md* xdp,
+    bool* is_ipv6,
+    __u8* protocol,
+    bool pass) {
   int action;
   if (*protocol == IPPROTO_IPIP) {
     if (*is_ipv6) {
@@ -313,16 +324,18 @@ static inline int process_encaped_ipip_pckt(void **data, void **data_end,
 #endif // of INLINE_DECAP_IPIP
 
 #ifdef INLINE_DECAP_GUE
-__attribute__((__always_inline__))
-static inline int process_encaped_gue_pckt(void **data, void **data_end,
-                                           struct xdp_md *xdp, bool is_ipv6,
-                                           bool pass) {
+__attribute__((__always_inline__)) static inline int process_encaped_gue_pckt(
+    void** data,
+    void** data_end,
+    struct xdp_md* xdp,
+    bool is_ipv6,
+    bool pass) {
   int offset = 0;
   int action;
   if (is_ipv6) {
     __u8 v6 = 0;
-    offset = sizeof(struct ipv6hdr) + sizeof(struct eth_hdr) +
-      sizeof(struct udphdr);
+    offset =
+        sizeof(struct ipv6hdr) + sizeof(struct eth_hdr) + sizeof(struct udphdr);
     // 1 byte for gue v1 marker to figure out what is internal protocol
     if ((*data + offset + 1) > *data_end) {
       return XDP_DROP;
@@ -343,14 +356,14 @@ static inline int process_encaped_gue_pckt(void **data, void **data_end,
       }
     }
   } else {
-    offset = sizeof(struct iphdr) + sizeof(struct eth_hdr) +
-      sizeof(struct udphdr);
+    offset =
+        sizeof(struct iphdr) + sizeof(struct eth_hdr) + sizeof(struct udphdr);
     if ((*data + offset) > *data_end) {
       return XDP_DROP;
     }
     action = decrement_ttl(*data, *data_end, offset, false);
     if (!gue_decap_v4(xdp, data, data_end)) {
-        return XDP_DROP;
+      return XDP_DROP;
     }
   }
   if (action >= 0) {
@@ -400,16 +413,19 @@ increment_quic_cid_drop_real_0() {
   quic_drop->v2 += 1;
 }
 
-__attribute__((__always_inline__))
-static inline int process_packet(void *data, __u64 off, void *data_end,
-                                 bool is_ipv6, struct xdp_md *xdp) {
-
-  struct ctl_value *cval;
-  struct real_definition *dst = NULL;
+__attribute__((__always_inline__)) static inline int process_packet(
+    void* data,
+    __u64 off,
+    void* data_end,
+    bool is_vlan,
+    bool is_ipv6,
+    struct xdp_md* xdp) {
+  struct ctl_value* cval;
+  struct real_definition* dst = NULL;
   struct packet_description pckt = {};
   struct vip_definition vip = {};
-  struct vip_meta *vip_info;
-  struct lb_stats *data_stats;
+  struct vip_meta* vip_info;
+  struct lb_stats* data_stats;
   __u64 iph_len;
   __u8 protocol;
 
@@ -418,13 +434,15 @@ static inline int process_packet(void *data, __u64 off, void *data_end,
   __u32 mac_addr_pos = 0;
   __u16 pkt_bytes;
   action = process_l3_headers(
-    &pckt, &protocol, off, &pkt_bytes, data, data_end, is_ipv6);
+      &pckt, &protocol, off, &pkt_bytes, data, data_end, is_vlan, is_ipv6);
   if (action >= 0) {
+    char msg[] = "can't process l3 headers, action: %d\n";
+    bpf_trace_printk(msg, sizeof(msg), action);
     return action;
   }
   protocol = pckt.flow.proto;
 
-  #ifdef INLINE_DECAP_IPIP
+#ifdef INLINE_DECAP_IPIP
   if (protocol == IPPROTO_IPIP || protocol == IPPROTO_IPV6) {
     bool pass = true;
     action = check_decap_dst(&pckt, is_ipv6, &pass);
@@ -437,14 +455,16 @@ static inline int process_packet(void *data, __u64 off, void *data_end,
 #endif // INLINE_DECAP_IPIP
 
   if (protocol == IPPROTO_TCP) {
-    if (!parse_tcp(data, data_end, is_ipv6, &pckt)) {
+    if (!parse_tcp(data, data_end, is_vlan, is_ipv6, &pckt)) {
+      char msg[] = "can't parse_tcp, drop\n";
+      bpf_trace_printk(msg, sizeof(msg));
       return XDP_DROP;
     }
   } else if (protocol == IPPROTO_UDP) {
-    if (!parse_udp(data, data_end, is_ipv6, &pckt)) {
+    if (!parse_udp(data, data_end, is_vlan, is_ipv6, &pckt)) {
       return XDP_DROP;
     }
-  #ifdef INLINE_DECAP_GUE
+#ifdef INLINE_DECAP_GUE
     if (pckt.flow.port16[1] == bpf_htons(GUE_DPORT)) {
       bool pass = true;
       action = check_decap_dst(&pckt, is_ipv6, &pass);
@@ -453,9 +473,11 @@ static inline int process_packet(void *data, __u64 off, void *data_end,
       }
       return process_encaped_gue_pckt(&data, &data_end, xdp, is_ipv6, pass);
     }
-  #endif // of INLINE_DECAP_GUE
+#endif // of INLINE_DECAP_GUE
   } else {
     // send to tcp/ip stack
+    char msg[] = "not tcp nor udp nor encap, pass\n";
+    bpf_trace_printk(msg, sizeof(msg));
     return XDP_PASS;
   }
 
@@ -465,6 +487,8 @@ static inline int process_packet(void *data, __u64 off, void *data_end,
     vip.vip = pckt.flow.dst;
   }
 
+  char msg[] = "dip: %u, src: %u, continue\n";
+  bpf_trace_printk(msg, sizeof(msg), vip.vip, pckt.flow.src);
   vip.port = pckt.flow.port16[1];
   vip.proto = pckt.flow.proto;
   vip_info = bpf_map_lookup_elem(&vip_map, &vip);
@@ -497,6 +521,8 @@ static inline int process_packet(void *data, __u64 off, void *data_end,
     }
     return send_icmp_too_big(xdp, is_ipv6, data_end - data);
 #else
+    char msg[] = "over MAX_PCKT_SIZE, drop\n";
+    bpf_trace_printk(msg, sizeof(msg));
     return XDP_DROP;
 #endif
   }
@@ -504,6 +530,8 @@ static inline int process_packet(void *data, __u64 off, void *data_end,
   __u32 stats_key = MAX_VIPS + LRU_CNTRS;
   data_stats = bpf_map_lookup_elem(&stats, &stats_key);
   if (!data_stats) {
+    char msg[] = "no data_stats, drop\n";
+    bpf_trace_printk(msg, sizeof(msg));
     return XDP_DROP;
   }
 
@@ -517,11 +545,11 @@ static inline int process_packet(void *data, __u64 off, void *data_end,
       return XDP_DROP;
     }
     int real_index;
-    real_index = parse_quic(data, data_end, is_ipv6, &pckt);
+    real_index = parse_quic(data, data_end, is_vlan, is_ipv6, &pckt);
     if (real_index > 0) {
       increment_quic_cid_version_stats(real_index);
       __u32 key = real_index;
-      __u32 *real_pos = bpf_map_lookup_elem(&quic_mapping, &key);
+      __u32* real_pos = bpf_map_lookup_elem(&quic_mapping, &key);
       if (real_pos) {
         key = *real_pos;
         // TODO: quic_mapping is array, which never fails to lookup element,
@@ -552,12 +580,14 @@ static inline int process_packet(void *data, __u64 off, void *data_end,
       pckt.flow.port16[0] = 0;
     }
     __u32 cpu_num = bpf_get_smp_processor_id();
-    void *lru_map = bpf_map_lookup_elem(&lru_mapping, &cpu_num);
+    void* lru_map = bpf_map_lookup_elem(&lru_mapping, &cpu_num);
     if (!lru_map) {
       lru_map = &fallback_cache;
       __u32 lru_stats_key = MAX_VIPS + FALLBACK_LRU_CNTR;
-      struct lb_stats *lru_stats = bpf_map_lookup_elem(&stats, &lru_stats_key);
+      struct lb_stats* lru_stats = bpf_map_lookup_elem(&stats, &lru_stats_key);
       if (!lru_stats) {
+        char msg[] = "can't get lru_stats, drop\n";
+        bpf_trace_printk(msg, sizeof(msg));
         return XDP_DROP;
       }
       // we weren't able to retrieve per cpu/core lru and falling back to
@@ -566,16 +596,17 @@ static inline int process_packet(void *data, __u64 off, void *data_end,
       lru_stats->v1 += 1;
     }
 
-    if (!(pckt.flags & F_SYN_SET) &&
-        !(vip_info->flags & F_LRU_BYPASS)) {
+    if (!(pckt.flags & F_SYN_SET) && !(vip_info->flags & F_LRU_BYPASS)) {
       connection_table_lookup(&dst, &pckt, lru_map);
     }
     if (!dst) {
       if (pckt.flow.proto == IPPROTO_TCP) {
         __u32 lru_stats_key = MAX_VIPS + LRU_MISS_CNTR;
-        struct lb_stats *lru_stats = bpf_map_lookup_elem(
-          &stats, &lru_stats_key);
+        struct lb_stats* lru_stats =
+            bpf_map_lookup_elem(&stats, &lru_stats_key);
         if (!lru_stats) {
+          char msg[] = "can't get lru_stats, drop\n";
+          bpf_trace_printk(msg, sizeof(msg));
           return XDP_DROP;
         }
         if (pckt.flags & F_SYN_SET) {
@@ -589,7 +620,9 @@ static inline int process_packet(void *data, __u64 off, void *data_end,
           lru_stats->v2 += 1;
         }
       }
-      if(!get_packet_dst(&dst, &pckt, vip_info, is_ipv6, lru_map)) {
+      if (!get_packet_dst(&dst, &pckt, vip_info, is_ipv6, lru_map)) {
+        char msg[] = "can't get_packet_dst, drop\n";
+        bpf_trace_printk(msg, sizeof(msg));
         return XDP_DROP;
       }
       // lru misses (either new connection or lru is full and starts to trash)
@@ -600,21 +633,27 @@ static inline int process_packet(void *data, __u64 off, void *data_end,
   cval = bpf_map_lookup_elem(&ctl_array, &mac_addr_pos);
 
   if (!cval) {
+    char msg[] = "no cval, drop\n";
+    bpf_trace_printk(msg, sizeof(msg));
     return XDP_DROP;
   }
 
   if (dst->flags & F_IPV6) {
-    if(!PCKT_ENCAP_V6(xdp, cval, is_ipv6, &pckt, dst, pkt_bytes)) {
+    if (!PCKT_ENCAP_V6(xdp, cval, is_ipv6, &pckt, dst, pkt_bytes)) {
       return XDP_DROP;
     }
   } else {
-    if(!PCKT_ENCAP_V4(xdp, cval, &pckt, dst, pkt_bytes)) {
+    if (!PCKT_ENCAP_V4(xdp, cval, is_vlan, &pckt, dst, pkt_bytes)) {
+      char msg[] = "can't encap, drop\n";
+      bpf_trace_printk(msg, sizeof(msg));
       return XDP_DROP;
     }
   }
   vip_num = vip_info->vip_num;
   data_stats = bpf_map_lookup_elem(&stats, &vip_num);
   if (!data_stats) {
+    char msg[] = "no data_stats, drop\n";
+    bpf_trace_printk(msg, sizeof(msg));
     return XDP_DROP;
   }
   data_stats->v1 += 1;
@@ -623,21 +662,26 @@ static inline int process_packet(void *data, __u64 off, void *data_end,
   // per real statistics
   data_stats = bpf_map_lookup_elem(&reals_stats, &pckt.real_index);
   if (!data_stats) {
+    char msg[] = "no data_stats, drop\n";
+    bpf_trace_printk(msg, sizeof(msg));
     return XDP_DROP;
   }
   data_stats->v1 += 1;
   data_stats->v2 += pkt_bytes;
 
+  char msg1[] = "vip: %u src: %u new_dst: %u everything OK, tx\n";
+  bpf_trace_printk(msg1, sizeof(msg1), vip.vip, pckt.flow.src, dst->dst);
   return XDP_TX;
 }
 
 SEC("xdp-balancer")
-int balancer_ingress(struct xdp_md *ctx) {
-  void *data = (void *)(long)ctx->data;
-  void *data_end = (void *)(long)ctx->data_end;
-  struct eth_hdr *eth = data;
+int balancer_ingress(struct xdp_md* ctx) {
+  void* data = (void*)(long)ctx->data;
+  void* data_end = (void*)(long)ctx->data_end;
+  struct eth_hdr* eth = data;
   __u32 eth_proto;
   __u32 nh_off;
+  bool is_vlan = false;
   nh_off = sizeof(struct eth_hdr);
 
   if (data + nh_off > data_end) {
@@ -647,12 +691,27 @@ int balancer_ingress(struct xdp_md *ctx) {
 
   eth_proto = eth->eth_proto;
 
+  if (eth_proto == BE_ETH_P_VLAN) {
+    char msg[] = "is vlan, assuming IPv4 and continue\n";
+    bpf_trace_printk(msg, sizeof(msg), eth_proto);
+    nh_off += 4;
+    if (data + nh_off > data_end) {
+      // bogus packet, len less than minimum ethernet frame size
+      return XDP_DROP;
+    }
+    // XXX
+    eth_proto = BE_ETH_P_IP;
+    is_vlan = true;
+  }
+
   if (eth_proto == BE_ETH_P_IP) {
-    return process_packet(data, nh_off, data_end, false, ctx);
+    return process_packet(data, nh_off, data_end, is_vlan, false, ctx);
   } else if (eth_proto == BE_ETH_P_IPV6) {
-    return process_packet(data, nh_off, data_end, true, ctx);
+    return process_packet(data, nh_off, data_end, is_vlan, true, ctx);
   } else {
     // pass to tcp/ip stack
+    char msg[] = "unknown protocol %d, pass\n";
+    bpf_trace_printk(msg, sizeof(msg), eth_proto);
     return XDP_PASS;
   }
 }

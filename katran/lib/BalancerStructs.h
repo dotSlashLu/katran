@@ -26,6 +26,7 @@ struct ctl_value {
   union {
     uint64_t value;
     uint32_t ifindex;
+    uint32_t vlan_hdr;
     uint8_t mac[6];
   };
 };
@@ -89,13 +90,13 @@ struct real_pos_lru {
 
 // key for longest prefix match ipv4 map
 struct v4_lpm_key {
-    uint32_t prefixlen;
-    uint32_t addr;
+  uint32_t prefixlen;
+  uint32_t addr;
 };
 
 // key for longest prefix match ipv6 map
 struct v6_lpm_key {
-    uint32_t prefixlen;
-    uint32_t addr[4];
+  uint32_t prefixlen;
+  uint32_t addr[4];
 };
 } // namespace katran

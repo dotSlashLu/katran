@@ -22,16 +22,16 @@
  * parsing etc)
  */
 
-#include <linux/ip.h>
-#include <linux/ipv6.h>
 #include <linux/icmp.h>
 #include <linux/icmpv6.h>
-#include <stddef.h>
+#include <linux/if_ether.h>
+#include <linux/ip.h>
+#include <linux/ipv6.h>
+#include <linux/ptrace.h>
 #include <linux/tcp.h>
 #include <linux/udp.h>
-#include <linux/if_ether.h>
-#include <linux/ptrace.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 #include "balancer_consts.h"
 #include "balancer_helpers.h"
@@ -57,12 +57,14 @@ struct quic_short_header {
 struct eth_hdr {
   unsigned char eth_dest[ETH_ALEN];
   unsigned char eth_source[ETH_ALEN];
-  unsigned short  eth_proto;
+  unsigned short eth_proto;
 };
 
-__attribute__((__always_inline__))
-static inline __u64 calc_offset(bool is_ipv6, bool is_icmp) {
+__attribute__((__always_inline__)) static inline __u64
+calc_offset(bool is_vlan, bool is_ipv6, bool is_icmp) {
   __u64 off = sizeof(struct eth_hdr);
+  if (is_vlan)
+    off += 4;
   if (is_ipv6) {
     off += sizeof(struct ipv6hdr);
     if (is_icmp) {
@@ -77,14 +79,15 @@ static inline __u64 calc_offset(bool is_ipv6, bool is_icmp) {
   return off;
 }
 
-__attribute__((__always_inline__))
-static inline bool parse_udp(void *data, void *data_end,
-                             bool is_ipv6,
-                             struct packet_description *pckt) {
-
+__attribute__((__always_inline__)) static inline bool parse_udp(
+    void* data,
+    void* data_end,
+    bool is_vlan,
+    bool is_ipv6,
+    struct packet_description* pckt) {
   bool is_icmp = !((pckt->flags & F_ICMP) == 0);
-  __u64 off = calc_offset(is_ipv6, is_icmp);
-  struct udphdr *udp;
+  __u64 off = calc_offset(is_vlan, is_ipv6, is_icmp);
+  struct udphdr* udp;
   udp = data + off;
 
   if (udp + 1 > data_end) {
@@ -103,14 +106,15 @@ static inline bool parse_udp(void *data, void *data_end,
   return true;
 }
 
-__attribute__((__always_inline__))
-static inline bool parse_tcp(void *data, void *data_end,
-                             bool is_ipv6,
-                             struct packet_description *pckt) {
-
+__attribute__((__always_inline__)) static inline bool parse_tcp(
+    void* data,
+    void* data_end,
+    bool is_vlan,
+    bool is_ipv6,
+    struct packet_description* pckt) {
   bool is_icmp = !((pckt->flags & F_ICMP) == 0);
-  __u64 off = calc_offset(is_ipv6, is_icmp);
-  struct tcphdr *tcp;
+  __u64 off = calc_offset(is_vlan, is_ipv6, is_icmp);
+  struct tcphdr* tcp;
   tcp = data + off;
 
   if (tcp + 1 > data_end) {
@@ -133,11 +137,14 @@ static inline bool parse_tcp(void *data, void *data_end,
   return true;
 }
 
-__attribute__((__always_inline__))
-static inline int parse_quic(void *data, void *data_end,
-                             bool is_ipv6, struct packet_description *pckt) {
+__attribute__((__always_inline__)) static inline int parse_quic(
+    void* data,
+    void* data_end,
+    bool is_vlan,
+    bool is_ipv6,
+    struct packet_description* pckt) {
   bool is_icmp = (pckt->flags & F_ICMP);
-  __u64 off = calc_offset(is_ipv6, is_icmp);
+  __u64 off = calc_offset(is_vlan, is_ipv6, is_icmp);
   // offset points to the beginning of transport header (udp) of quic's packet
   /*                                      |QUIC PKT TYPE|           */
   if ((data + off + sizeof(struct udphdr) + sizeof(__u8)) > data_end) {
@@ -163,7 +170,7 @@ static inline int parse_quic(void *data, void *data_end,
       return FURTHER_PROCESSING;
     }
 
-    struct quic_long_header* long_header = (struct quic_long_header*) quic_data;
+    struct quic_long_header* long_header = (struct quic_long_header*)quic_data;
     // Post draft version 22, this byte is the conn id length of dest conn id
     if (long_header->conn_id_lens < QUIC_MIN_CONNID_LEN) {
       return FURTHER_PROCESSING;

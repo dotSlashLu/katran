@@ -24,6 +24,7 @@
 // ETH_P_IP in be format
 #define BE_ETH_P_IP 8
 #define BE_ETH_P_IPV6 56710
+#define BE_ETH_P_VLAN 129
 
 // GUE variant 1 using first four bits of inner packet as a pseudo header
 // we are using last two of this four bits to distinct v4 vs v6. see RFC for
@@ -41,8 +42,9 @@
 #define IPV4_HDR_LEN_NO_OPT 20
 #define IPV4_PLUS_ICMP_HDR 28
 #define IPV6_PLUS_ICMP_HDR 48
+#define DOT1Q_HDR_LEN 4
 
-//consistent hashing ring size
+// consistent hashing ring size
 #ifndef RING_SIZE
 #define RING_SIZE 65537
 #endif
@@ -151,7 +153,6 @@
 #endif
 #define QUIC_CONNID_VERSION_V1_MAX_VAL 0xFFFF
 
-
 // max ethernet packet's size which destination is a vip
 // we need to inforce it because if origin_packet + encap_hdr > MTU
 // then, depends on the dirver, it could either panic or drop the packet
@@ -164,7 +165,6 @@
 // plus ipv4/ipv6 header and few bytes of payload
 #define ICMP_TOOBIG_SIZE 98
 #define ICMP6_TOOBIG_SIZE 262
-
 
 #define ICMP6_TOOBIG_PAYLOAD_SIZE (ICMP6_TOOBIG_SIZE - 6)
 #define ICMP_TOOBIG_PAYLOAD_SIZE (ICMP_TOOBIG_SIZE - 6)
@@ -303,7 +303,6 @@
 #define PCKT_ENCAP_V6 encap_v6
 #define HC_ENCAP hc_encap_ipip
 #endif
-
 
 /**
  * positions in pckts_srcs table

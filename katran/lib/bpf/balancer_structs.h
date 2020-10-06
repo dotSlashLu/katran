@@ -54,6 +54,7 @@ struct ctl_value {
   union {
     __u64 value;
     __u32 ifindex;
+    __u32 vlan_hdr;
     __u8 mac[6];
   };
 };
@@ -97,14 +98,14 @@ struct lb_stats {
 
 // key for ipv4 lpm lookups
 struct v4_lpm_key {
-    __u32 prefixlen;
-    __be32 addr;
+  __u32 prefixlen;
+  __be32 addr;
 };
 
 // key for ipv6 lpm lookups
 struct v6_lpm_key {
-    __u32 prefixlen;
-    __be32 addr[4];
+  __u32 prefixlen;
+  __be32 addr[4];
 };
 
 struct address {
